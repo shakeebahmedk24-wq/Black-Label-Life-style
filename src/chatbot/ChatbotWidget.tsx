@@ -53,10 +53,79 @@ export const ChatbotWidget: React.FC = () => {
   const [streamingText, setStreamingText] = useState('');
   const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
 
+  // Viewport tracking for mobile virtual keyboard
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 640;
+    }
+    return false;
+  });
+  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Screen size check
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 640);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Visual Viewport tracking on mobile (adjusts when keyboard opens/closes)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateHeight = () => {
+      if (window.innerWidth < 640) {
+        if (window.visualViewport) {
+          setViewportHeight(window.visualViewport.height);
+        } else {
+          setViewportHeight(window.innerHeight);
+        }
+      } else {
+        setViewportHeight(null);
+      }
+    };
+
+    updateHeight();
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateHeight);
+      window.visualViewport.addEventListener('scroll', updateHeight);
+      return () => {
+        window.visualViewport?.removeEventListener('resize', updateHeight);
+        window.visualViewport?.removeEventListener('scroll', updateHeight);
+      };
+    } else {
+      window.addEventListener('resize', updateHeight);
+      return () => window.removeEventListener('resize', updateHeight);
+    }
+  }, []);
+
+  // Body scroll lock on mobile when modal is open
+  useEffect(() => {
+    if (isOpen && isMobile) {
+      const prevOverflow = document.body.style.overflow;
+      const prevPosition = document.body.style.position;
+      const prevWidth = document.body.style.width;
+
+      document.body.style.overflow = 'hidden';
+      document.body.style.position = 'fixed';
+      document.body.style.width = '100%';
+
+      return () => {
+        document.body.style.overflow = prevOverflow;
+        document.body.style.position = prevPosition;
+        document.body.style.width = prevWidth;
+      };
+    }
+  }, [isOpen, isMobile]);
 
   // Sync messages to sessionStorage
   useEffect(() => {
@@ -96,7 +165,7 @@ export const ChatbotWidget: React.FC = () => {
     scrollToBottom(true);
   }, [messages, streamingText, isLoading, scrollToBottom]);
 
-  // Focus input when opened on non-mobile
+  // Focus input when opened on desktop
   useEffect(() => {
     if (isOpen && window.innerWidth >= 640) {
       setTimeout(() => {
@@ -115,27 +184,6 @@ export const ChatbotWidget: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen]);
-
-  // Reset chat
-  const handleResetChat = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setIsLoading(false);
-    setStreamingText('');
-    setLastFailedPrompt(null);
-    const freshMessages = [INITIAL_MESSAGE];
-    setMessages(freshMessages);
-    try {
-      sessionStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(freshMessages));
-    } catch {
-      // ignore
-    }
-    setTimeout(() => {
-      inputRef.current?.focus();
-    }, 50);
-  };
 
   // Send message
   const handleSendMessage = async (textToSend?: string) => {
@@ -163,20 +211,48 @@ export const ChatbotWidget: React.FC = () => {
     abortControllerRef.current = controller;
 
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: newMessages.map((m) => ({
-            role: m.role,
-            text: m.text,
-          })),
-          pagePath: currentPath,
-        }),
-        signal: controller.signal,
+      const payload = JSON.stringify({
+        messages: newMessages.map((m) => ({
+          role: m.role,
+          text: m.text,
+        })),
+        pagePath: currentPath,
       });
+
+      let response: Response;
+
+      try {
+        response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: payload,
+          signal: controller.signal,
+        });
+
+        // If 404 on Netlify, attempt direct Netlify function path
+        if (!response.ok && response.status === 404) {
+          response = await fetch('/.netlify/functions/chat', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: payload,
+            signal: controller.signal,
+          });
+        }
+      } catch (err: unknown) {
+        // Fallback to Netlify function on direct fetch error
+        response = await fetch('/.netlify/functions/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: payload,
+          signal: controller.signal,
+        });
+      }
 
       if (!response.ok) {
         throw new Error(`Server returned status ${response.status}`);
@@ -197,7 +273,6 @@ export const ChatbotWidget: React.FC = () => {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        // Keep the last partial line in buffer
         buffer = lines.pop() || '';
 
         for (const line of lines) {
@@ -241,7 +316,6 @@ export const ChatbotWidget: React.FC = () => {
       }
     } catch (err: unknown) {
       if ((err as Error)?.name === 'AbortError') {
-        // User aborted, do nothing
         return;
       }
       console.error('Concierge chat error:', err);
@@ -267,29 +341,38 @@ export const ChatbotWidget: React.FC = () => {
     }
   };
 
-  // Only show quick-reply chips under the very first message if there are no subsequent messages
   const showChips = messages.length === 1 && messages[0].id === 'welcome-1';
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end pointer-events-none">
-      {/* CHAT PANEL */}
+    <>
+      {/* CHAT MODAL / PANEL */}
       {isOpen && (
         <div
           ref={panelRef}
           role="dialog"
           aria-label="Black Label Concierge Chat"
           aria-modal="true"
-          className="pointer-events-auto w-full max-sm:fixed max-sm:inset-0 max-sm:w-full max-sm:h-full max-sm:rounded-none sm:w-[380px] sm:h-[560px] mb-4 sm:mb-4 bg-[#090b0e]/98 backdrop-blur-2xl border border-[#c5a059]/30 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.9),0_0_35px_rgba(197,160,89,0.15)] flex flex-col overflow-hidden transition-all duration-300 animate-in fade-in zoom-in-95 origin-bottom-right"
+          style={{
+            height: isMobile && viewportHeight ? `${viewportHeight}px` : undefined,
+          }}
+          className={`z-[100] flex flex-col bg-[#090b0e] overflow-hidden select-text ${
+            isMobile
+              ? 'fixed inset-0 w-full h-[100dvh]'
+              : 'fixed bottom-22 right-6 w-[380px] h-[560px] max-h-[calc(100vh-6rem)] rounded-2xl border border-[#c5a059]/30 shadow-[0_20px_60px_rgba(0,0,0,0.9),0_0_35px_rgba(197,160,89,0.15)] backdrop-blur-2xl transition-all duration-300 animate-in fade-in zoom-in-95 origin-bottom-right'
+          }`}
         >
           {/* HEADER */}
-          <div className="px-5 py-4 bg-[#0b0d11]/90 border-b border-[#c5a059]/20 flex items-center justify-between select-none">
+          <div
+            style={{ paddingTop: isMobile ? 'max(0.75rem, env(safe-area-inset-top))' : undefined }}
+            className="px-4 sm:px-5 py-3.5 bg-[#0b0d11] border-b border-[#c5a059]/20 flex items-center justify-between shrink-0 select-none"
+          >
             <div className="flex items-center gap-3">
-              <div className="relative flex items-center justify-center w-8 h-8 rounded-full bg-[#12151c] border border-[#c5a059]/40 shadow-[0_0_10px_rgba(197,160,89,0.15)]">
+              <div className="relative flex items-center justify-center w-8 h-8 rounded-full bg-[#12151c] border border-[#c5a059]/40 shadow-[0_0_10px_rgba(197,160,89,0.15)] shrink-0">
                 <span className="font-serif font-bold text-xs tracking-wider text-[#c5a059]">BL</span>
                 <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-[#22c55e] border-2 border-[#090b0e]"></span>
               </div>
               <div>
-                <h2 className="font-serif text-[15px] font-semibold tracking-wide text-[#faf8f5] leading-tight">
+                <h2 className="font-serif text-[15px] sm:text-base font-semibold tracking-wide text-[#faf8f5] leading-tight">
                   Black Label Concierge
                 </h2>
                 <div className="flex items-center gap-1.5 mt-0.5">
@@ -301,23 +384,23 @@ export const ChatbotWidget: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1">
               {/* CLOSE BUTTON */}
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}
                 aria-label="Close concierge chat"
-                className="p-1.5 text-[#dcd6ca] hover:text-[#faf8f5] hover:bg-white/[0.05] rounded transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#c5a059]"
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center p-2 text-[#dcd6ca] hover:text-[#faf8f5] active:text-[#c5a059] hover:bg-white/[0.05] rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#c5a059]"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="M6 18L18 6M6 6l12 12" />
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
           </div>
 
           {/* MESSAGES LIST */}
-          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 scroll-smooth">
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 overscroll-contain scroll-smooth">
             {messages.map((msg, index) => {
               const isUser = msg.role === 'user';
               const isFirstBotMessage = !isUser && index === 0;
@@ -338,12 +421,12 @@ export const ChatbotWidget: React.FC = () => {
                         <div>
                           <MarkdownMessage content={msg.text} />
                           {msg.isError && lastFailedPrompt && (
-                            <div className="mt-3 pt-2.5 border-t border-[#c5a059]/20 flex items-center justify-between">
+                            <div className="mt-3 pt-2.5 border-t border-[#c5a059]/20 flex items-center justify-between gap-2">
                               <span className="text-[11px] font-mono text-[#a69f91]">Network interrupted</span>
                               <button
                                 type="button"
                                 onClick={() => handleSendMessage(lastFailedPrompt)}
-                                className="px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider text-[#060709] bg-[#c5a059] hover:bg-[#dfc182] rounded font-semibold transition-colors"
+                                className="px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider text-[#060709] bg-[#c5a059] hover:bg-[#dfc182] active:scale-95 rounded font-semibold transition-all shrink-0"
                               >
                                 Retry
                               </button>
@@ -356,17 +439,17 @@ export const ChatbotWidget: React.FC = () => {
 
                   {/* QUICK-REPLY CHIPS UNDER FIRST MESSAGE */}
                   {isFirstBotMessage && showChips && (
-                    <div className="pt-1 pb-1 space-y-1.5 pl-1">
+                    <div className="pt-1 pb-1 space-y-2 pl-0.5">
                       <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#c5a059]/70">
                         Suggested Inquiries
                       </p>
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap gap-2">
                         {QUICK_REPLIES.map((chip, chipIdx) => (
                           <button
                             key={chipIdx}
                             type="button"
                             onClick={() => handleSendMessage(chip)}
-                            className="text-left text-[11px] sm:text-xs text-[#e6e0d4] hover:text-[#faf8f5] bg-[#121620]/90 hover:bg-[#c5a059]/15 border border-[#c5a059]/30 hover:border-[#c5a059] px-3 py-1.5 rounded-full transition-all duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#c5a059]"
+                            className="text-left text-xs text-[#e6e0d4] hover:text-[#faf8f5] bg-[#121620] hover:bg-[#c5a059]/15 active:bg-[#c5a059]/25 border border-[#c5a059]/30 hover:border-[#c5a059] px-3.5 py-2 rounded-full transition-all duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#c5a059]"
                           >
                             {chip}
                           </button>
@@ -399,7 +482,10 @@ export const ChatbotWidget: React.FC = () => {
           </div>
 
           {/* INPUT & SEND FORM */}
-          <div className="p-3 bg-[#0b0d11]/95 border-t border-[#c5a059]/20">
+          <div
+            style={{ paddingBottom: isMobile ? 'max(0.75rem, env(safe-area-inset-bottom))' : undefined }}
+            className="p-3 bg-[#0b0d11] border-t border-[#c5a059]/20 shrink-0"
+          >
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -417,7 +503,8 @@ export const ChatbotWidget: React.FC = () => {
                   rows={1}
                   aria-label="Ask Black Label Concierge"
                   disabled={isLoading}
-                  className="w-full resize-none py-2.5 pl-3.5 pr-2 bg-[#121620] text-[#faf8f5] placeholder-[#8f887c] text-xs sm:text-sm rounded-xl border border-white/10 focus:border-[#c5a059] focus:outline-none focus:ring-1 focus:ring-[#c5a059] transition-all disabled:opacity-50"
+                  /* text-base on mobile prevents iOS Safari auto-zoom! */
+                  className="w-full resize-none py-2.5 pl-3.5 pr-2 bg-[#121620] text-[#faf8f5] placeholder-[#8f887c] text-base sm:text-sm rounded-xl border border-white/10 focus:border-[#c5a059] focus:outline-none focus:ring-1 focus:ring-[#c5a059] transition-all disabled:opacity-50"
                   style={{ maxHeight: '100px' }}
                 />
               </div>
@@ -426,60 +513,58 @@ export const ChatbotWidget: React.FC = () => {
                 type="submit"
                 disabled={isLoading || !inputValue.trim()}
                 aria-label="Send message"
-                className="flex items-center justify-center w-9 h-9 rounded-xl bg-[#c5a059] text-[#060709] hover:bg-[#dfc182] disabled:opacity-40 disabled:hover:bg-[#c5a059] disabled:cursor-not-allowed transition-all duration-200 shrink-0 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c5a059]"
+                className="flex items-center justify-center min-w-[42px] min-h-[42px] w-10 h-10 rounded-xl bg-[#c5a059] text-[#060709] hover:bg-[#dfc182] active:scale-95 disabled:opacity-40 disabled:hover:bg-[#c5a059] disabled:cursor-not-allowed transition-all duration-200 shrink-0 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c5a059]"
               >
                 <svg className="w-4 h-4 translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 12h14M12 5l7 7-7 7" />
                 </svg>
               </button>
             </form>
-            <div className="mt-1.5 flex items-center justify-between text-[10px] font-mono text-[#8f887c] px-1">
-              <span>Shift+Enter for newline</span>
+            <div className="mt-1.5 flex items-center justify-between text-[10px] font-mono text-[#8f887c] px-1 select-none">
+              <span className="hidden sm:inline">Shift+Enter for newline</span>
+              <span className="sm:hidden">Send on submit</span>
               <span>Discreet & Encrypted</span>
             </div>
           </div>
         </div>
       )}
 
-      {/* FLOATING TRIGGER BUTTON (Site-Wide) */}
-      <button
-        type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
-        aria-label={isOpen ? 'Close Black Label Concierge Chat' : 'Open Black Label Concierge Chat'}
-        aria-expanded={isOpen}
-        className="pointer-events-auto group relative flex items-center justify-center w-14 h-14 rounded-full bg-[#0b0d11] text-[#faf8f5] border border-[#c5a059]/40 hover:border-[#c5a059] shadow-[0_4px_25px_rgba(0,0,0,0.8),0_0_20px_rgba(197,160,89,0.3)] hover:shadow-[0_4px_30px_rgba(197,160,89,0.5)] transition-all duration-300 hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c5a059]"
-      >
-        {/* Glow halo */}
-        <span className="absolute inset-0 rounded-full bg-[#c5a059]/10 group-hover:bg-[#c5a059]/20 transition-colors pointer-events-none"></span>
+      {/* FLOATING TRIGGER BUTTON (When closed) */}
+      {!isOpen && (
+        <div className="fixed bottom-6 right-6 z-50">
+          <button
+            type="button"
+            onClick={() => setIsOpen(true)}
+            aria-label="Open Black Label Concierge Chat"
+            className="group relative flex items-center justify-center w-14 h-14 rounded-full bg-[#0b0d11] text-[#faf8f5] border border-[#c5a059]/40 hover:border-[#c5a059] shadow-[0_4px_25px_rgba(0,0,0,0.8),0_0_20px_rgba(197,160,89,0.3)] hover:shadow-[0_4px_30px_rgba(197,160,89,0.5)] transition-all duration-300 hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c5a059]"
+          >
+            {/* Glow halo */}
+            <span className="absolute inset-0 rounded-full bg-[#c5a059]/10 group-hover:bg-[#c5a059]/20 transition-colors pointer-events-none"></span>
 
-        {isOpen ? (
-          <svg className="w-6 h-6 text-[#c5a059]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        ) : (
-          <div className="flex flex-col items-center justify-center">
-            <svg
-              className="w-6 h-6 text-[#c5a059] transition-transform duration-300 group-hover:scale-110"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="1.75"
-                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-              />
-            </svg>
-          </div>
-        )}
+            <div className="flex flex-col items-center justify-center">
+              <svg
+                className="w-6 h-6 text-[#c5a059] transition-transform duration-300 group-hover:scale-110"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.75"
+                  d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                />
+              </svg>
+            </div>
 
-        {/* Status dot */}
-        <span className="absolute top-1 right-1 flex h-3 w-3">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c5a059] opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-3 w-3 bg-[#c5a059] border-2 border-[#0b0d11]"></span>
-        </span>
-      </button>
-    </div>
+            {/* Status dot */}
+            <span className="absolute top-1 right-1 flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c5a059] opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-[#c5a059] border-2 border-[#0b0d11]"></span>
+            </span>
+          </button>
+        </div>
+      )}
+    </>
   );
 };

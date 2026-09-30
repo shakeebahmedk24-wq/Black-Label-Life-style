@@ -1,0 +1,68 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+
+# API Chat endpoint to Netlify serverless function
+[[redirects]]
+  from = "/api/chat"
+  to = "/.netlify/functions/chat"
+  status = 200
+
+# MPA Clean URLs
+[[redirects]]
+  from = "/social"
+  to = "/social/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/entertainment"
+  to = "/entertainment/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/trading"
+  to = "/trading/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/lifestyle"
+  to = "/lifestyle/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/design"
+  to = "/design/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/business-services"
+  to = "/business-services/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/investments"
+  to = "/investments/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/luxury"
+  to = "/luxury/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/concierge"
+  to = "/concierge/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/contact"
+  to = "/contact/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/admin"
+  to = "/admin/index.html"
+  status = 200
