@@ -302,17 +302,6 @@ export const ChatbotWidget: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-1.5">
-              {/* NEW CHAT BUTTON */}
-              <button
-                type="button"
-                onClick={handleResetChat}
-                title="Start a new chat"
-                aria-label="New chat"
-                className="px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider text-[#dcd6ca] hover:text-[#c5a059] hover:bg-white/[0.04] border border-white/10 hover:border-[#c5a059]/40 rounded transition-all duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#c5a059]"
-              >
-                New chat
-              </button>
-
               {/* CLOSE BUTTON */}
               <button
                 type="button"
