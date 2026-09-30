@@ -1,0 +1,8 @@
+{
+  "name": "Black Label Life style ",
+  "description": "San Francisco luxury concierge family of 8 brands based in Millennium Tower offering social growth, in-home events, design, investments, luxury rentals, and executive visitor telemetry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
