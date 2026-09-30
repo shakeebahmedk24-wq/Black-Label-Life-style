@@ -558,7 +558,7 @@ export function renderHeadTags(params: {
 
   return `
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content" />
   <title>${params.title}</title>
   <meta name="description" content="${params.description}" />
   <link rel="canonical" href="${params.canonicalUrl}" />

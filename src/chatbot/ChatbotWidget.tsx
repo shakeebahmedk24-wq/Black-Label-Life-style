@@ -53,21 +53,19 @@ export const ChatbotWidget: React.FC = () => {
   const [streamingText, setStreamingText] = useState('');
   const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
 
-  // Viewport tracking for mobile virtual keyboard
   const [isMobile, setIsMobile] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return window.innerWidth < 640;
     }
     return false;
   });
-  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Screen size check
+  // Responsive breakpoint tracking
   useEffect(() => {
     const handleResize = () => {
       setIsMobile(window.innerWidth < 640);
@@ -77,52 +75,14 @@ export const ChatbotWidget: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Visual Viewport tracking on mobile (adjusts when keyboard opens/closes)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const updateHeight = () => {
-      if (window.innerWidth < 640) {
-        if (window.visualViewport) {
-          setViewportHeight(window.visualViewport.height);
-        } else {
-          setViewportHeight(window.innerHeight);
-        }
-      } else {
-        setViewportHeight(null);
-      }
-    };
-
-    updateHeight();
-
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', updateHeight);
-      window.visualViewport.addEventListener('scroll', updateHeight);
-      return () => {
-        window.visualViewport?.removeEventListener('resize', updateHeight);
-        window.visualViewport?.removeEventListener('scroll', updateHeight);
-      };
-    } else {
-      window.addEventListener('resize', updateHeight);
-      return () => window.removeEventListener('resize', updateHeight);
-    }
-  }, []);
-
-  // Body scroll lock on mobile when modal is open
+  // Simple, safe body scroll lock on mobile (does NOT set position: fixed)
   useEffect(() => {
     if (isOpen && isMobile) {
       const prevOverflow = document.body.style.overflow;
-      const prevPosition = document.body.style.position;
-      const prevWidth = document.body.style.width;
-
       document.body.style.overflow = 'hidden';
-      document.body.style.position = 'fixed';
-      document.body.style.width = '100%';
 
       return () => {
         document.body.style.overflow = prevOverflow;
-        document.body.style.position = prevPosition;
-        document.body.style.width = prevWidth;
       };
     }
   }, [isOpen, isMobile]);
@@ -145,7 +105,7 @@ export const ChatbotWidget: React.FC = () => {
     }
   }, [isOpen]);
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom of messages
   const scrollToBottom = useCallback((smooth = true) => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({
@@ -165,25 +125,26 @@ export const ChatbotWidget: React.FC = () => {
     scrollToBottom(true);
   }, [messages, streamingText, isLoading, scrollToBottom]);
 
-  // Focus input when opened on desktop
+  // Auto-focus only on desktop to avoid triggering unwanted mobile keyboard jumps
   useEffect(() => {
-    if (isOpen && window.innerWidth >= 640) {
-      setTimeout(() => {
+    if (isOpen && !isMobile) {
+      const timer = setTimeout(() => {
         inputRef.current?.focus();
       }, 150);
+      return () => clearTimeout(timer);
     }
-  }, [isOpen]);
+  }, [isOpen, isMobile]);
 
-  // Handle Escape key to close panel
+  // Handle Escape key ONLY on desktop keyboards (not mobile virtual keyboards)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
+      if (e.key === 'Escape' && isOpen && !isMobile) {
         setIsOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen]);
+  }, [isOpen, isMobile]);
 
   // Send message
   const handleSendMessage = async (textToSend?: string) => {
@@ -243,7 +204,7 @@ export const ChatbotWidget: React.FC = () => {
           });
         }
       } catch (err: unknown) {
-        // Fallback to Netlify function on direct fetch error
+        // Fallback to Netlify function on direct fetch network error
         response = await fetch('/.netlify/functions/chat', {
           method: 'POST',
           headers: {
@@ -352,16 +313,13 @@ export const ChatbotWidget: React.FC = () => {
           role="dialog"
           aria-label="Black Label Concierge Chat"
           aria-modal="true"
-          style={{
-            height: isMobile && viewportHeight ? `${viewportHeight}px` : undefined,
-          }}
-          className={`z-[100] flex flex-col bg-[#090b0e] overflow-hidden select-text ${
+          className={`z-[100] flex flex-col bg-[#090b0e] select-text overflow-hidden ${
             isMobile
               ? 'fixed inset-0 w-full h-[100dvh]'
               : 'fixed bottom-22 right-6 w-[380px] h-[560px] max-h-[calc(100vh-6rem)] rounded-2xl border border-[#c5a059]/30 shadow-[0_20px_60px_rgba(0,0,0,0.9),0_0_35px_rgba(197,160,89,0.15)] backdrop-blur-2xl transition-all duration-300 animate-in fade-in zoom-in-95 origin-bottom-right'
           }`}
         >
-          {/* HEADER */}
+          {/* HEADER (shrink-0 prevents header from being compressed) */}
           <div
             style={{ paddingTop: isMobile ? 'max(0.75rem, env(safe-area-inset-top))' : undefined }}
             className="px-4 sm:px-5 py-3.5 bg-[#0b0d11] border-b border-[#c5a059]/20 flex items-center justify-between shrink-0 select-none"
@@ -390,7 +348,7 @@ export const ChatbotWidget: React.FC = () => {
                 type="button"
                 onClick={() => setIsOpen(false)}
                 aria-label="Close concierge chat"
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center p-2 text-[#dcd6ca] hover:text-[#faf8f5] active:text-[#c5a059] hover:bg-white/[0.05] rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#c5a059]"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center p-2 text-[#dcd6ca] hover:text-[#faf8f5] active:text-[#c5a059] hover:bg-white/[0.05] rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#c5a059]"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
@@ -399,8 +357,8 @@ export const ChatbotWidget: React.FC = () => {
             </div>
           </div>
 
-          {/* MESSAGES LIST */}
-          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 overscroll-contain scroll-smooth">
+          {/* MESSAGES LIST (min-h-0 allows flex child to shrink properly when keyboard opens) */}
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-4 overscroll-contain scroll-smooth">
             {messages.map((msg, index) => {
               const isUser = msg.role === 'user';
               const isFirstBotMessage = !isUser && index === 0;
@@ -481,7 +439,7 @@ export const ChatbotWidget: React.FC = () => {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* INPUT & SEND FORM */}
+          {/* INPUT & SEND FORM (shrink-0 guarantees it always stays visible above keyboard) */}
           <div
             style={{ paddingBottom: isMobile ? 'max(0.75rem, env(safe-area-inset-bottom))' : undefined }}
             className="p-3 bg-[#0b0d11] border-t border-[#c5a059]/20 shrink-0"
@@ -499,11 +457,17 @@ export const ChatbotWidget: React.FC = () => {
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  onFocus={() => {
+                    // Smoothly ensure latest messages are visible when typing
+                    setTimeout(() => {
+                      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                    }, 120);
+                  }}
                   placeholder="Ask the concierge..."
                   rows={1}
                   aria-label="Ask Black Label Concierge"
                   disabled={isLoading}
-                  /* text-base on mobile prevents iOS Safari auto-zoom! */
+                  /* 16px font-size on mobile completely prevents iOS Safari viewport zooming! */
                   className="w-full resize-none py-2.5 pl-3.5 pr-2 bg-[#121620] text-[#faf8f5] placeholder-[#8f887c] text-base sm:text-sm rounded-xl border border-white/10 focus:border-[#c5a059] focus:outline-none focus:ring-1 focus:ring-[#c5a059] transition-all disabled:opacity-50"
                   style={{ maxHeight: '100px' }}
                 />
@@ -513,7 +477,7 @@ export const ChatbotWidget: React.FC = () => {
                 type="submit"
                 disabled={isLoading || !inputValue.trim()}
                 aria-label="Send message"
-                className="flex items-center justify-center min-w-[42px] min-h-[42px] w-10 h-10 rounded-xl bg-[#c5a059] text-[#060709] hover:bg-[#dfc182] active:scale-95 disabled:opacity-40 disabled:hover:bg-[#c5a059] disabled:cursor-not-allowed transition-all duration-200 shrink-0 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c5a059]"
+                className="flex items-center justify-center min-w-[44px] min-h-[44px] w-11 h-11 rounded-xl bg-[#c5a059] text-[#060709] hover:bg-[#dfc182] active:scale-95 disabled:opacity-40 disabled:hover:bg-[#c5a059] disabled:cursor-not-allowed transition-all duration-200 shrink-0 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c5a059]"
               >
                 <svg className="w-4 h-4 translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 12h14M12 5l7 7-7 7" />
